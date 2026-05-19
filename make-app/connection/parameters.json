@@ -2,8 +2,8 @@
   {
     "name": "apiUrl",
     "label": "URL da API Report",
-    "type": "url",
-    "help": "URL do deploy no Render, **sem** barra no final.\n\nExemplo: `https://uazapi-helper.onrender.com`\n\nO token UAZAPI fica configurado no servidor (variável `UAZAPI_TOKEN`), não aqui.",
+    "type": "text",
+    "help": "Cole a URL do Render SEM barra no final. Exemplo: https://report-uj00.onrender.com",
     "required": true,
     "editable": true
   }

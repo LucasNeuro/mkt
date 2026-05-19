@@ -7,6 +7,8 @@ from rich.logging import RichHandler
 from dotenv import load_dotenv
 
 from uazapi_client import UazapiClient
+import storage
+from conversations import extract_messages_list, persist_sync_batch, persist_webhook_payload
 
 logging.basicConfig(
     level="INFO",
@@ -32,7 +34,7 @@ app = FastAPI(
         "Envio de mensagens e webhook exclusivo para o report. "
         "Conexão do WhatsApp e troca de webhook: painel UAZAPI."
     ),
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -92,6 +94,25 @@ class GroupInfoPayload(BaseModel):
     groupjid: str = Field(..., examples=["120363012345678901@g.us"])
 
 
+class MonitorGroupPayload(BaseModel):
+    group_jid: str = Field(..., examples=["120363012345678901@g.us"])
+    group_name: str | None = None
+
+
+class SyncGroupPayload(BaseModel):
+    group_jid: str = Field(..., examples=["120363012345678901@g.us"])
+    group_name: str | None = None
+    limit: int = Field(50, ge=1, le=500)
+
+
+def require_supabase():
+    if not storage.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase não configurado. Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.",
+        )
+
+
 # --- Instância (somente leitura) ---
 
 
@@ -135,6 +156,70 @@ async def info_grupo(payload: GroupInfoPayload):
     if not result["sucesso"]:
         raise HTTPException(status_code=result["status_code"], detail=result)
     return result["dados"]
+
+
+# --- Conversas (Supabase) ---
+
+
+@app.post("/grupos/monitorar", summary="Monitorar grupo (salvar no Supabase)", tags=["Conversas"])
+async def monitorar_grupo(payload: MonitorGroupPayload):
+    """Registra um grupo para monitoramento e histórico de mensagens."""
+    require_supabase()
+    grupo = storage.upsert_group(payload.group_jid, payload.group_name)
+    return {"sucesso": True, "grupo": grupo}
+
+
+@app.get("/grupos/monitorados", summary="Grupos monitorados", tags=["Conversas"])
+async def grupos_monitorados():
+    require_supabase()
+    return {"grupos": storage.list_monitored_groups()}
+
+
+@app.post(
+    "/grupos/sincronizar",
+    summary="Buscar histórico na UAZAPI e salvar no Supabase",
+    tags=["Conversas"],
+)
+async def sincronizar_grupo(payload: SyncGroupPayload):
+    """
+    Puxa mensagens do grupo via UAZAPI (`POST /message/find`) e grava em `wa_messages`.
+
+    Use o `group_jid` obtido em GET /grupos.
+    """
+    require_supabase()
+    token = require_token()
+    result = await client.find_messages(token, payload.group_jid, payload.limit)
+    if not result["sucesso"]:
+        raise HTTPException(status_code=result["status_code"], detail=result)
+
+    items = extract_messages_list(result["dados"])
+    saved = persist_sync_batch(payload.group_jid, payload.group_name, items)
+
+    return {
+        "sucesso": True,
+        "group_jid": payload.group_jid,
+        "encontradas_uazapi": len(items),
+        "salvas_supabase": saved,
+    }
+
+
+@app.get(
+    "/grupos/mensagens",
+    summary="Listar mensagens salvas de um grupo",
+    tags=["Conversas"],
+)
+async def mensagens_do_grupo(
+    group_jid: str,
+    limit: int = 100,
+):
+    """Mensagens persistidas (webhook + sincronização)."""
+    require_supabase()
+    mensagens = storage.list_group_messages(group_jid, limit=min(limit, 500))
+    return {
+        "group_jid": group_jid,
+        "total": len(mensagens),
+        "mensagens": mensagens,
+    }
 
 
 # --- Envio ---
@@ -215,8 +300,20 @@ async def webhook_report(request: Request):
         f"de={message.get('senderName') or chat.get('wa_name')}"
     )
 
-    # Ponto de extensão: processar relatório aqui (mensagens recebidas, etc.)
-    return {"ok": True, "instancia": UAZAPI_INSTANCE_NAME, "evento": event_type}
+    saved = None
+    if event_type == "messages" and storage.is_configured():
+        try:
+            saved = persist_webhook_payload(payload)
+        except Exception as e:
+            log.exception(f"Erro ao salvar mensagem no Supabase: {e}")
+
+    return {
+        "ok": True,
+        "instancia": UAZAPI_INSTANCE_NAME,
+        "evento": event_type,
+        "salvo_supabase": saved is not None,
+        "message_id": (saved or {}).get("message_id") if saved else None,
+    }
 
 
 @app.get("/webhook/report/info", summary="Como configurar o webhook no painel", tags=["Webhook"])
@@ -244,6 +341,12 @@ def read_root():
         "docs": "/docs",
         "webhook": "/webhook/report",
         "enviar": "POST /enviar",
+        "conversas": {
+            "monitorar": "POST /grupos/monitorar",
+            "sincronizar": "POST /grupos/sincronizar",
+            "mensagens": "GET /grupos/mensagens?group_jid=...",
+        },
+        "supabase": storage.is_configured(),
     }
 
 

@@ -1,15 +1,15 @@
 {
-  "url": "{{parameters.apiUrl}}/instancia",
+  "url": "{{trim(parameters.apiUrl)}}/instancia",
   "method": "GET",
   "headers": {
     "Accept": "application/json"
   },
   "response": {
     "valid": {
-      "condition": "{{statusCode == 200 && body.nome}}"
+      "condition": "{{statusCode == 200}}"
     },
     "error": {
-      "message": "[{{statusCode}}] {{ifempty(body.detail, 'Não foi possível conectar à API Report. Verifique a URL e se o serviço está no ar.')}}"
+      "message": "[{{statusCode}}] {{ifempty(body.detail, ifempty(body.erro, 'Falha ao conectar. Abra a URL no navegador antes (Render free dorme).'))}}"
     },
     "metadata": {
       "type": "text",

@@ -70,3 +70,11 @@ class UazapiClient:
 
     async def set_webhook(self, token: str, payload: dict[str, Any]):
         return await self.request("POST", "/webhook", token=token, json=payload)
+
+    async def find_messages(
+        self, token: str, chat_id: str, limit: int = 50, cursor: str | None = None
+    ):
+        payload: dict[str, Any] = {"chatId": chat_id, "limit": limit}
+        if cursor:
+            payload["cursor"] = cursor
+        return await self.request("POST", "/message/find", token=token, json=payload)

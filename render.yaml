@@ -15,3 +15,7 @@ services:
         value: RTEPORT_INSTANTANEO
       - key: UAZAPI_TOKEN
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
