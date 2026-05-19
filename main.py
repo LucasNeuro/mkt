@@ -1,132 +1,254 @@
-from fastapi import FastAPI, HTTPException, Body
-from pydantic import BaseModel, Field
-import httpx
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, Field, model_validator
 import emoji
 import os
 import logging
 from rich.logging import RichHandler
 from dotenv import load_dotenv
 
-# Configuração de Logs com Rich
+from uazapi_client import UazapiClient
+
 logging.basicConfig(
     level="INFO",
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True)]
+    handlers=[RichHandler(rich_tracebacks=True)],
 )
-
 log = logging.getLogger("rich")
 
-# Carrega variáveis de ambiente
 load_dotenv()
 
+# Instância fixa — RTEPORT_INSTANTANEO (painel UAZAPI: onnzetecnologia)
+UAZAPI_BASE_URL = os.getenv("UAZAPI_BASE_URL", "https://onnzetecnologia.uazapi.com").rstrip("/")
+UAZAPI_TOKEN = os.getenv("UAZAPI_TOKEN", "")
+UAZAPI_INSTANCE_NAME = os.getenv("UAZAPI_INSTANCE_NAME", "RTEPORT_INSTANTANEO")
+
+client = UazapiClient(UAZAPI_BASE_URL)
+
 app = FastAPI(
-    title="UAZAPI Helper API",
-    description="API para formatar mensagens com emojis e enviar via WhatsApp usando UAZAPI.",
-    version="1.0.0",
-    docs_url="/docs",  # Swagger UI
-    redoc_url="/redoc"
+    title="Report Instantâneo — UAZAPI",
+    description=(
+        f"API dedicada à instância **{UAZAPI_INSTANCE_NAME}**. "
+        "Envio de mensagens e webhook exclusivo para o report. "
+        "Conexão do WhatsApp e troca de webhook: painel UAZAPI."
+    ),
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
-# Configurações da UAZAPI (Configure estas variáveis no seu ambiente ou arquivo .env)
-UAZAPI_BASE_URL = os.getenv("UAZAPI_BASE_URL", "https://free.uazapi.com")
-UAZAPI_TOKEN = os.getenv("UAZAPI_TOKEN", "")
 
-class MessagePayload(BaseModel):
-    text: str = Field(..., json_schema_extra={"example": "Olá! Teste de emoji :rocket: e *negrito*"})
-    number: str = Field(..., json_schema_extra={"example": "5511999999999"})
-    instance_token: str = Field(None, description="Opcional: Token da instância UAZAPI")
-    subdomain: str = Field("free", description="Subdomínio da UAZAPI (free ou api)")
-    linkPreview: bool = Field(False, description="Ativa preview de links")
-    linkPreviewTitle: str = Field(None, description="Título personalizado do link")
-    linkPreviewDescription: str = Field(None, description="Descrição personalizada do link")
-    linkPreviewImage: str = Field(None, description="URL da imagem do link")
-    linkPreviewLarge: bool = Field(False, description="Preview grande com upload")
-    delay: int = Field(0, description="Atraso em ms (mostra 'Digitando...')")
-    mentions: str = Field(None, description="Números para mencionar separados por vírgula")
-    async_mode: bool = Field(False, alias="async", description="Envio assíncrono via fila")
+def require_token() -> str:
+    if not UAZAPI_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="UAZAPI_TOKEN não configurado no servidor (.env / Render).",
+        )
+    return UAZAPI_TOKEN
 
-    class Config:
-        populate_by_name = True
 
 def format_for_whatsapp(text: str) -> str:
-    """
-    Formata o texto para WhatsApp:
-    - Converte aliases de emoji (ex: :smile:) em emojis reais.
-    - Suporta formatação padrão do WhatsApp (*negrito*, _itálico_, ~tachado~).
-    """
-    log.info(f"Formatando texto: [cyan]{text}[/cyan]")
-    # Converte aliases de emoji (ex: :rocket: -> 🚀)
-    formatted_text = emoji.emojize(text, language='alias')
-    return formatted_text
+    log.info(f"Formatando: [cyan]{text}[/cyan]")
+    return emoji.emojize(text, language="alias")
 
-@app.post("/enviar", summary="Enviar mensagem formatada", tags=["WhatsApp"])
-async def send_formatted_message(payload: MessagePayload):
-    """
-    Endpoint aberto para receber texto, formatar e enviar via WhatsApp.
-    
-    - **text**: Texto com suporte a aliases de emoji (:rocket:) e formatação (*bold*).
-    - **number**: Número de destino (DDI + DDD + Número).
-    - **instance_token**: (Opcional) Token da instância. Se omitido, usa o configurado no .env.
-    """
-    # Determina o token da UAZAPI a ser usado
-    token = payload.instance_token or UAZAPI_TOKEN
-    
-    if not token:
-        log.error("Token da UAZAPI não encontrado!")
+
+def resolve_destino(number: str | None, group_jid: str | None) -> str:
+    destino = (group_jid or number or "").strip()
+    if not destino:
         raise HTTPException(
-            status_code=400, 
-            detail="Erro: Token da UAZAPI não configurado no servidor nem enviado no payload."
+            status_code=422,
+            detail="Informe 'number' (contato ou grupo) ou 'group_jid' (ex: 120363...@g.us).",
         )
-    
-    base_url = f"https://{payload.subdomain}.uazapi.com"
-    
-    # Formata o texto
-    formatted_text = format_for_whatsapp(payload.text)
-    
-    log.info(f"Enviando para o número: [green]{payload.number}[/green]")
-    
-    # Endpoint da UAZAPI para envio de texto (Corrigido para /send/text)
-    url = f"{base_url}/send/text"
-    
-    headers = {
-        "token": token,
-        "Content-Type": "application/json"
+    return destino
+
+
+class MessagePayload(BaseModel):
+    text: str = Field(..., json_schema_extra={"example": "Relatório :chart: *atualizado*"})
+    number: str | None = Field(
+        None,
+        description="Contato (5511999999999) ou JID do grupo",
+    )
+    group_jid: str | None = Field(None, examples=["120363012345678901@g.us"])
+    linkPreview: bool = False
+    linkPreviewTitle: str | None = None
+    linkPreviewDescription: str | None = None
+    linkPreviewImage: str | None = None
+    linkPreviewLarge: bool = False
+    delay: int = 0
+    mentions: str | None = Field(None, description="Em grupo: 'all' para @todos")
+    replyid: str | None = None
+    async_mode: bool = Field(False, alias="async")
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validar_destino(self):
+        if not self.number and not self.group_jid:
+            raise ValueError("Informe 'number' ou 'group_jid'.")
+        return self
+
+
+class GroupInfoPayload(BaseModel):
+    groupjid: str = Field(..., examples=["120363012345678901@g.us"])
+
+
+# --- Instância (somente leitura) ---
+
+
+@app.get("/instancia", summary="Dados da instância fixa", tags=["Instância"])
+async def dados_instancia():
+    """Retorna nome e URL da instância configurada no servidor (sem expor o token)."""
+    return {
+        "nome": UAZAPI_INSTANCE_NAME,
+        "base_url": UAZAPI_BASE_URL,
+        "webhook_dedicado": "/webhook/report",
     }
-    
-    # Prepara o payload para a UAZAPI incluindo os novos campos
-    data = payload.model_dump(exclude={"instance_token", "subdomain", "async_mode"}, exclude_none=True)
+
+
+@app.get("/instancia/status", summary="Status da conexão WhatsApp", tags=["Instância"])
+async def status_instancia():
+    """disconnected | connecting | connected — conecte pelo painel UAZAPI."""
+    token = require_token()
+    result = await client.instance_status(token)
+    if not result["sucesso"]:
+        raise HTTPException(status_code=result["status_code"], detail=result)
+    return result["dados"]
+
+
+# --- Grupos ---
+
+
+@app.get("/grupos", summary="Grupos desta instância", tags=["Grupos"])
+async def listar_grupos():
+    """Grupos em que o número da instância RTEPORT_INSTANTANEO participa."""
+    token = require_token()
+    result = await client.list_groups(token)
+    if not result["sucesso"]:
+        raise HTTPException(status_code=result["status_code"], detail=result)
+    return result["dados"]
+
+
+@app.post("/grupos/info", summary="Detalhes de um grupo", tags=["Grupos"])
+async def info_grupo(payload: GroupInfoPayload):
+    token = require_token()
+    result = await client.group_info(token, payload.groupjid)
+    if not result["sucesso"]:
+        raise HTTPException(status_code=result["status_code"], detail=result)
+    return result["dados"]
+
+
+# --- Envio ---
+
+
+@app.post("/enviar", summary="Enviar mensagem (contato ou grupo)", tags=["Mensagens"])
+async def enviar_mensagem(payload: MessagePayload):
+    """
+    Envia pela instância **RTEPORT_INSTANTANEO** apenas.
+
+    - Contato: `number` = `5511999999999`
+    - Grupo: `group_jid` ou `number` = `120363...@g.us` (veja GET /grupos)
+    """
+    token = require_token()
+    destino = resolve_destino(payload.number, payload.group_jid)
+    formatted_text = format_for_whatsapp(payload.text)
+
+    log.info(f"[{UAZAPI_INSTANCE_NAME}] Enviando → [green]{destino}[/green]")
+
+    data = payload.model_dump(
+        exclude={"async_mode", "group_jid", "number", "text"},
+        exclude_none=True,
+    )
+    data["number"] = destino
     data["text"] = formatted_text
     if payload.async_mode:
-        data["async"] = payload.async_mode
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(url, json=data, headers=headers)
-            
-            log.info(f"Resposta UAZAPI: [yellow]{response.status_code}[/yellow]")
-            
-            return {
-                "sucesso": True,
-                "texto_enviado": formatted_text,
-                "resposta_uazapi": response.json()
-            }
-        except httpx.HTTPStatusError as e:
-            log.error(f"Erro na UAZAPI: {e.response.text}")
-            return {
-                "sucesso": False,
-                "erro": f"Erro na UAZAPI ({e.response.status_code})",
-                "detalhes": e.response.text
-            }
-        except Exception as e:
-            log.exception("Erro interno no servidor")
-            raise HTTPException(status_code=500, detail=f"Erro interno no servidor: {str(e)}")
+        data["async"] = True
+
+    result = await client.send_text(token, data)
+    if not result["sucesso"]:
+        raise HTTPException(status_code=result["status_code"], detail=result)
+
+    return {
+        "sucesso": True,
+        "instancia": UAZAPI_INSTANCE_NAME,
+        "destino": destino,
+        "texto_enviado": formatted_text,
+        "resposta_uazapi": result["dados"],
+    }
+
+
+# --- Webhook dedicado ao report ---
+
+
+@app.post(
+    "/webhook/report",
+    summary="Webhook exclusivo do Report (configurar no painel UAZAPI)",
+    tags=["Webhook"],
+    include_in_schema=True,
+)
+async def webhook_report(request: Request):
+    """
+    URL para cadastrar no painel da instância **RTEPORT_INSTANTANEO**:
+
+    `https://SEU-DOMINIO-RENDER/webhook/report`
+
+    Eventos sugeridos: `messages`, `connection`, `message_status`.
+    Não compartilhe esta URL com outros processos — é só deste report.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    incoming_token = payload.get("token")
+    if incoming_token and incoming_token != UAZAPI_TOKEN:
+        log.warning("Webhook rejeitado: token não corresponde à instância do report")
+        raise HTTPException(status_code=403, detail="Token da instância inválido")
+
+    event_type = payload.get("EventType") or payload.get("event") or "unknown"
+    message = payload.get("message") or {}
+    chat = payload.get("chat") or {}
+
+    log.info(
+        f"[webhook/report] {UAZAPI_INSTANCE_NAME} | "
+        f"evento={event_type} | "
+        f"grupo={message.get('isGroup')} | "
+        f"de={message.get('senderName') or chat.get('wa_name')}"
+    )
+
+    # Ponto de extensão: processar relatório aqui (mensagens recebidas, etc.)
+    return {"ok": True, "instancia": UAZAPI_INSTANCE_NAME, "evento": event_type}
+
+
+@app.get("/webhook/report/info", summary="Como configurar o webhook no painel", tags=["Webhook"])
+def webhook_info():
+    """Instruções para não misturar com outros webhooks do mesmo servidor UAZAPI."""
+    return {
+        "instancia": UAZAPI_INSTANCE_NAME,
+        "base_url_uazapi": UAZAPI_BASE_URL,
+        "caminho_webhook": "/webhook/report",
+        "exemplo_url_render": "https://uazapi-helper.onrender.com/webhook/report",
+        "eventos_recomendados": ["messages", "connection", "message_status"],
+        "observacao": (
+            "Configure apenas na instância RTEPORT_INSTANTANEO no painel UAZAPI. "
+            "Outras instâncias/processos devem usar outra URL de webhook."
+        ),
+    }
+
 
 @app.get("/", include_in_schema=False)
 def read_root():
-    return {"message": "UAZAPI Helper API está online!", "swagger_docs": "/docs"}
+    return {
+        "app": "Report Instantâneo",
+        "instancia": UAZAPI_INSTANCE_NAME,
+        "uazapi": UAZAPI_BASE_URL,
+        "docs": "/docs",
+        "webhook": "/webhook/report",
+        "enviar": "POST /enviar",
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
-    log.info("Iniciando servidor [bold green]UAZAPI Helper[/bold green]...")
+
+    log.info(f"Iniciando report — instância [bold]{UAZAPI_INSTANCE_NAME}[/bold]")
     uvicorn.run(app, host="0.0.0.0", port=8000)

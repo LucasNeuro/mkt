@@ -10,6 +10,8 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: UAZAPI_BASE_URL
-        value: https://free.uazapi.com
+        value: https://onnzetecnologia.uazapi.com
+      - key: UAZAPI_INSTANCE_NAME
+        value: RTEPORT_INSTANTANEO
       - key: UAZAPI_TOKEN
         sync: false
