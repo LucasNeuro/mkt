@@ -1,0 +1,7 @@
+{
+  "url": "/instancia/status",
+  "method": "GET",
+  "response": {
+    "output": "{{body}}"
+  }
+}

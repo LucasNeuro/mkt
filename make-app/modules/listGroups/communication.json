@@ -1,0 +1,7 @@
+{
+  "url": "/grupos",
+  "method": "GET",
+  "response": {
+    "output": "{{body}}"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "EventType": "messages",
+  "message": {
+    "id": "3EB0538DA65A59F6D8A251",
+    "text": "Olá, preciso do relatório",
+    "sender": "5511999999999@s.whatsapp.net",
+    "senderName": "João",
+    "chatid": "120363012345678901@g.us",
+    "isGroup": true,
+    "groupName": "Grupo Report",
+    "fromMe": false,
+    "messageType": "text"
+  },
+  "chat": {
+    "wa_name": "Grupo Report",
+    "wa_chatid": "120363012345678901@g.us",
+    "phone": "",
+    "wa_isGroup": true
+  },
+  "owner": "5511888888888",
+  "token": "seu-token-instancia"
+}

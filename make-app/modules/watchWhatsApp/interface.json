@@ -1,0 +1,44 @@
+[
+  {
+    "name": "EventType",
+    "type": "text",
+    "label": "Tipo de evento"
+  },
+  {
+    "name": "message",
+    "type": "collection",
+    "label": "Mensagem",
+    "spec": [
+      { "name": "id", "type": "text", "label": "ID" },
+      { "name": "text", "type": "text", "label": "Texto" },
+      { "name": "sender", "type": "text", "label": "Remetente" },
+      { "name": "senderName", "type": "text", "label": "Nome do remetente" },
+      { "name": "chatid", "type": "text", "label": "Chat ID" },
+      { "name": "isGroup", "type": "boolean", "label": "É grupo" },
+      { "name": "groupName", "type": "text", "label": "Nome do grupo" },
+      { "name": "fromMe", "type": "boolean", "label": "Enviada por mim" },
+      { "name": "messageType", "type": "text", "label": "Tipo" }
+    ]
+  },
+  {
+    "name": "chat",
+    "type": "collection",
+    "label": "Chat",
+    "spec": [
+      { "name": "wa_name", "type": "text", "label": "Nome" },
+      { "name": "wa_chatid", "type": "text", "label": "Chat ID" },
+      { "name": "phone", "type": "text", "label": "Telefone" },
+      { "name": "wa_isGroup", "type": "boolean", "label": "É grupo" }
+    ]
+  },
+  {
+    "name": "owner",
+    "type": "text",
+    "label": "Owner"
+  },
+  {
+    "name": "token",
+    "type": "text",
+    "label": "Token instância"
+  }
+]

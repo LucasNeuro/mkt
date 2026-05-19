@@ -1,0 +1,27 @@
+[
+  {
+    "name": "sucesso",
+    "type": "boolean",
+    "label": "Sucesso"
+  },
+  {
+    "name": "instancia",
+    "type": "text",
+    "label": "Instância"
+  },
+  {
+    "name": "destino",
+    "type": "text",
+    "label": "Destino"
+  },
+  {
+    "name": "texto_enviado",
+    "type": "text",
+    "label": "Texto enviado"
+  },
+  {
+    "name": "resposta_uazapi",
+    "type": "any",
+    "label": "Resposta UAZAPI"
+  }
+]

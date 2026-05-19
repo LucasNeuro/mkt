@@ -1,0 +1,19 @@
+{
+  "url": "{{parameters.apiUrl}}/instancia",
+  "method": "GET",
+  "headers": {
+    "Accept": "application/json"
+  },
+  "response": {
+    "valid": {
+      "condition": "{{statusCode == 200 && body.nome}}"
+    },
+    "error": {
+      "message": "[{{statusCode}}] {{ifempty(body.detail, 'Não foi possível conectar à API Report. Verifique a URL e se o serviço está no ar.')}}"
+    },
+    "metadata": {
+      "type": "text",
+      "value": "{{body.nome}}"
+    }
+  }
+}

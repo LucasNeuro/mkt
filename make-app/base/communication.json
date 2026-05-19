@@ -1,0 +1,15 @@
+{
+  "baseUrl": "{{connection.apiUrl}}",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "response": {
+    "valid": {
+      "condition": "{{statusCode >= 200 && statusCode < 300}}"
+    },
+    "error": {
+      "message": "[{{statusCode}}] {{ifempty(body.detail, ifempty(body.erro, body.message))}}"
+    }
+  }
+}
