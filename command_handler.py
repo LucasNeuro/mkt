@@ -34,6 +34,37 @@ def extract_sender_phone(payload: dict) -> str:
     return storage.normalize_phone(chat.get("phone"))
 
 
+def extract_chat_dest_phone(payload: dict) -> str:
+    message = payload.get("message") or {}
+    chat = payload.get("chat") or {}
+    return storage.normalize_phone(
+        message.get("chatid") or chat.get("wa_chatid") or chat.get("phone") or ""
+    )
+
+
+def extract_admin_actor_phone(payload: dict) -> str:
+    """Número do admin que está comandando (inclui 'Conversar comigo mesmo')."""
+    message = payload.get("message") or {}
+    if message.get("fromMe"):
+        owner = storage.normalize_phone(
+            message.get("owner") or message.get("sender_pn") or message.get("sender") or ""
+        )
+        if owner:
+            return owner
+    return extract_sender_phone(payload)
+
+
+def is_admin_self_chat(payload: dict) -> bool:
+    """WhatsApp 'Mensagens salvas' / conversar comigo mesmo no mesmo aparelho."""
+    message = payload.get("message") or {}
+    if not message.get("fromMe") or message.get("isGroup"):
+        return False
+    owner = extract_admin_actor_phone(payload)
+    if not owner or not is_admin(owner):
+        return False
+    return extract_chat_dest_phone(payload) == owner
+
+
 def extract_reply_dest(payload: dict) -> str:
     message = payload.get("message") or {}
     chat = payload.get("chat") or {}
@@ -58,10 +89,10 @@ def extract_message_text(payload: dict) -> str:
 
 def is_private_admin_message(payload: dict) -> bool:
     message = payload.get("message") or {}
-    if message.get("fromMe"):
-        return False
     if message.get("isGroup"):
         return False
+    if message.get("fromMe"):
+        return is_admin_self_chat(payload)
     sender = extract_sender_phone(payload)
     return is_admin(sender)
 
@@ -200,7 +231,7 @@ async def handle_admin_command(
             )
         return {"erro": "mistral_nao_configurada"}
 
-    admin_phone = extract_sender_phone(payload)
+    admin_phone = extract_admin_actor_phone(payload)
     reply_dest = extract_reply_dest(payload)
     text = extract_message_text(payload).lower().strip()
     cmd = re.sub(r"\s+", " ", text)
