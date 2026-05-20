@@ -11,6 +11,19 @@ from uazapi_client import UazapiClient
 
 log = logging.getLogger("rich")
 
+GROUPS_PER_PAGE = 15
+
+LIST_GROUPS_COMMANDS = (
+    "report",
+    "grupos",
+    "resumo",
+    "menu",
+    "inicio",
+    "início",
+    "listar grupos",
+    "listar",
+)
+
 ADMIN_PHONES = {
     storage.normalize_phone(p.strip())
     for p in os.getenv("ADMIN_PHONES", "").split(",")
@@ -125,8 +138,58 @@ def extract_groups_list(data: Any) -> list[dict]:
             or item.get("groupName")
             or jid
         )
-        groups.append({"jid": jid, "name": name})
-    return groups
+        groups.append({"jid": str(jid), "name": str(name)})
+    return dedupe_sort_groups(groups)
+
+
+def dedupe_sort_groups(groups: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for group in groups:
+        jid = group.get("jid") or ""
+        if not jid or jid in seen:
+            continue
+        seen.add(jid)
+        unique.append(group)
+    return sorted(unique, key=lambda g: (g.get("name") or "").casefold())
+
+
+def parse_group_step(step: str) -> tuple[bool, int]:
+    if step == "selecting_group":
+        return True, 0
+    if step.startswith("selecting_group:"):
+        try:
+            return True, max(0, int(step.split(":", 1)[1]))
+        except ValueError:
+            return True, 0
+    return False, 0
+
+
+def group_step_name(page: int) -> str:
+    return f"selecting_group:{page}"
+
+
+def format_groups_page(groups: list[dict], page: int) -> str:
+    total = len(groups)
+    total_pages = max(1, (total + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+    page = min(max(page, 0), total_pages - 1)
+    start = page * GROUPS_PER_PAGE
+    chunk = groups[start : start + GROUPS_PER_PAGE]
+
+    lines = [
+        f"📂 *Grupos disponíveis* ({total} total)",
+        f"Página *{page + 1}* de *{total_pages}*\n",
+    ]
+    for i, group in enumerate(chunk, start=start + 1):
+        lines.append(f"*{i}.* {group['name']}")
+
+    lines.append("\nResponda com o *número* do grupo para o resumo de *hoje*.")
+    if page + 1 < total_pages:
+        lines.append("• *mais* — próxima página")
+    if page > 0:
+        lines.append("• *anterior* — página anterior")
+    lines.append("• *cancelar* — voltar ao início")
+    return "\n".join(lines)
 
 
 async def send_whatsapp_text(client: UazapiClient, token: str, dest: str, text: str) -> bool:
@@ -252,6 +315,7 @@ async def handle_admin_command(
             "Comandos:\n"
             "• *report* ou *grupos* — listar grupos\n"
             "• *1*, *2*... — escolher grupo e gerar resumo do dia\n"
+            "• *mais* / *anterior* — navegar na lista de grupos\n"
             "• *historico* — ver resumos salvos\n"
             "• *cancelar* — voltar ao início",
         )
@@ -270,7 +334,7 @@ async def handle_admin_command(
         await send_whatsapp_text(client, token, reply_dest, "\n".join(lines))
         return {"comando": "historico", "total": len(summaries)}
 
-    if cmd in ("report", "grupos", "resumo", "menu", "inicio", "início"):
+    if cmd in LIST_GROUPS_COMMANDS:
         result = await client.list_groups(token)
         if not result.get("sucesso"):
             await send_whatsapp_text(
@@ -285,23 +349,49 @@ async def handle_admin_command(
 
         storage.upsert_session(
             admin_phone,
-            step="selecting_group",
+            step=group_step_name(0),
             pending_groups=groups,
             selected_group_jid=None,
             selected_group_name=None,
         )
 
-        lines = ["📂 *Grupos disponíveis:*\n"]
-        for i, g in enumerate(groups[:15], 1):
-            lines.append(f"*{i}.* {g['name']}")
-        lines.append("\nResponda com o *número* do grupo para gerar o resumo de *hoje*.")
-        lines.append("Ou *cancelar* para voltar.")
-        await send_whatsapp_text(client, token, reply_dest, "\n".join(lines))
-        return {"comando": "listar_grupos", "total": len(groups)}
+        await send_whatsapp_text(
+            client, token, reply_dest, format_groups_page(groups, 0)
+        )
+        return {"comando": "listar_grupos", "total": len(groups), "pagina": 1}
 
-    if step == "selecting_group" and cmd.isdigit():
+    is_selecting, page = parse_group_step(step)
+    pending = session.get("pending_groups") or []
+
+    if is_selecting and cmd in ("mais", "proximo", "próximo", "next"):
+        if not pending:
+            await send_whatsapp_text(
+                client, token, reply_dest, "Envie *report* para listar os grupos."
+            )
+            return {"erro": "sem_grupos_pendentes"}
+        total_pages = max(1, (len(pending) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+        new_page = min(page + 1, total_pages - 1)
+        storage.upsert_session(admin_phone, step=group_step_name(new_page), pending_groups=pending)
+        await send_whatsapp_text(
+            client, token, reply_dest, format_groups_page(pending, new_page)
+        )
+        return {"comando": "pagina_grupos", "pagina": new_page + 1, "total": len(pending)}
+
+    if is_selecting and cmd in ("anterior", "prev"):
+        if not pending:
+            await send_whatsapp_text(
+                client, token, reply_dest, "Envie *report* para listar os grupos."
+            )
+            return {"erro": "sem_grupos_pendentes"}
+        new_page = max(page - 1, 0)
+        storage.upsert_session(admin_phone, step=group_step_name(new_page), pending_groups=pending)
+        await send_whatsapp_text(
+            client, token, reply_dest, format_groups_page(pending, new_page)
+        )
+        return {"comando": "pagina_grupos", "pagina": new_page + 1, "total": len(pending)}
+
+    if is_selecting and cmd.isdigit():
         idx = int(cmd) - 1
-        pending = session.get("pending_groups") or []
         if idx < 0 or idx >= len(pending):
             await send_whatsapp_text(client, token, reply_dest, "Número inválido. Tente de novo.")
             return {"erro": "indice_invalido"}
