@@ -5,9 +5,7 @@
     "text": "{{parameters.text}}",
     "number": "{{ifempty(parameters.number, undefined)}}",
     "group_jid": "{{ifempty(parameters.group_jid, undefined)}}",
-    "mentions": "{{ifempty(parameters.mentions, undefined)}}",
-    "delay": "{{parameters.delay}}",
-    "async": "{{parameters.async}}"
+    "mentions": "{{ifempty(parameters.mentions, undefined)}}"
   },
   "response": {
     "output": "{{body}}"

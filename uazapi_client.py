@@ -65,6 +65,9 @@ class UazapiClient:
     async def send_text(self, token: str, payload: dict[str, Any]):
         return await self.request("POST", "/send/text", token=token, json=payload)
 
+    async def send_poll(self, token: str, payload: dict[str, Any]):
+        return await self.request("POST", "/send/poll", token=token, json=payload)
+
     async def get_webhook(self, token: str):
         return await self.request("GET", "/webhook", token=token)
 

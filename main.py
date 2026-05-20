@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from uazapi_client import UazapiClient
 import storage
 from conversations import extract_messages_list, persist_sync_batch, persist_webhook_payload
+from command_handler import handle_admin_command
+import mistral_service
 
 logging.basicConfig(
     level="INFO",
@@ -34,7 +36,7 @@ app = FastAPI(
         "Envio de mensagens e webhook exclusivo para o report. "
         "Conexão do WhatsApp e troca de webhook: painel UAZAPI."
     ),
-    version="2.1.0",
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -103,6 +105,13 @@ class SyncGroupPayload(BaseModel):
     group_jid: str = Field(..., examples=["120363012345678901@g.us"])
     group_name: str | None = None
     limit: int = Field(50, ge=1, le=500)
+
+
+class GerarResumoPayload(BaseModel):
+    group_jid: str = Field(..., examples=["120363012345678901@g.us"])
+    group_name: str | None = None
+    enviar_grupo: bool = Field(True, description="Enviar resumo e enquete no grupo")
+    enviar_enquete: bool = Field(True)
 
 
 def require_supabase():
@@ -222,6 +231,72 @@ async def mensagens_do_grupo(
     }
 
 
+# --- Resumos IA (Mistral) ---
+
+
+@app.get("/resumos", summary="Listar resumos salvos", tags=["Resumos IA"])
+async def listar_resumos(group_jid: str | None = None, limit: int = 30):
+    require_supabase()
+    return {"resumos": storage.list_summaries(group_jid, limit=min(limit, 100))}
+
+
+@app.post("/resumos/gerar", summary="Gerar resumo do dia (Mistral)", tags=["Resumos IA"])
+async def gerar_resumo(payload: GerarResumoPayload):
+    """
+    Lê mensagens de hoje no Supabase, gera resumo com Mistral e opcionalmente envia no grupo + enquete.
+    """
+    require_supabase()
+    if not mistral_service.is_configured():
+        raise HTTPException(status_code=503, detail="MISTRAL_API_KEY não configurada.")
+
+    token = require_token()
+    messages = storage.list_group_messages_today(payload.group_jid)
+    messages_text = storage.format_messages_for_ai(messages)
+    group_name = payload.group_name or payload.group_jid
+
+    summary = await mistral_service.generate_group_summary(group_name, messages_text)
+    summary = format_for_whatsapp(summary)
+
+    sent_text = False
+    poll_sent = False
+
+    if payload.enviar_grupo:
+        result = await client.send_text(
+            token, {"number": payload.group_jid, "text": summary}
+        )
+        sent_text = result.get("sucesso", False)
+
+    if payload.enviar_enquete:
+        poll_result = await client.send_poll(
+            token,
+            {
+                "number": payload.group_jid,
+                "question": "Como foi o dia no grupo? :star2:",
+                "options": ["Excelente :thumbsup:", "Bom :ok_hand:", "Precisa melhorar :chart:"],
+            },
+        )
+        poll_sent = poll_result.get("sucesso", False)
+
+    saved = storage.save_summary(
+        group_jid=payload.group_jid,
+        group_name=group_name,
+        content=summary,
+        message_count=len(messages),
+        requested_by="api",
+        sent_to_group=sent_text,
+        poll_sent=poll_sent,
+    )
+
+    return {
+        "sucesso": True,
+        "resumo": saved,
+        "content": summary,
+        "message_count": len(messages),
+        "sent_to_group": sent_text,
+        "poll_sent": poll_sent,
+    }
+
+
 # --- Envio ---
 
 
@@ -301,11 +376,20 @@ async def webhook_report(request: Request):
     )
 
     saved = None
-    if event_type == "messages" and storage.is_configured():
+    command_result = None
+
+    if event_type == "messages":
+        if storage.is_configured():
+            try:
+                saved = persist_webhook_payload(payload)
+            except Exception as e:
+                log.exception(f"Erro ao salvar mensagem no Supabase: {e}")
+
         try:
-            saved = persist_webhook_payload(payload)
+            command_result = await handle_admin_command(payload, client, UAZAPI_TOKEN)
         except Exception as e:
-            log.exception(f"Erro ao salvar mensagem no Supabase: {e}")
+            log.exception(f"Erro no handler de comandos: {e}")
+            command_result = {"erro": str(e)}
 
     return {
         "ok": True,
@@ -313,6 +397,7 @@ async def webhook_report(request: Request):
         "evento": event_type,
         "salvo_supabase": saved is not None,
         "message_id": (saved or {}).get("message_id") if saved else None,
+        "comando_admin": command_result,
     }
 
 
@@ -346,7 +431,13 @@ def read_root():
             "sincronizar": "POST /grupos/sincronizar",
             "mensagens": "GET /grupos/mensagens?group_jid=...",
         },
+        "resumos_ia": {
+            "gerar": "POST /resumos/gerar",
+            "listar": "GET /resumos",
+            "comandos_privado": "report | 1,2,3... | historico | cancelar",
+        },
         "supabase": storage.is_configured(),
+        "mistral": mistral_service.is_configured(),
     }
 
 

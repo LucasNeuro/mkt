@@ -3,39 +3,25 @@
     "name": "text",
     "label": "Mensagem",
     "type": "text",
-    "help": "Texto com emojis (:rocket:) e formatação WhatsApp (*negrito*, _itálico_).",
+    "help": "Texto com emojis (:rocket:) e *negrito*",
     "required": true
   },
   {
     "name": "number",
     "label": "Número ou JID",
     "type": "text",
-    "help": "Contato: `5511999999999` (DDI+DDD+número). Grupo: pode usar este campo com JID `120363...@g.us` **ou** o campo Grupo JID abaixo."
+    "help": "Contato: 5511999999999. Ou JID do grupo neste campo."
   },
   {
     "name": "group_jid",
     "label": "Grupo JID",
     "type": "text",
-    "help": "ID do grupo no formato `120363012345678901@g.us`. Use **List WhatsApp Groups** para obter o JID."
+    "help": "Ex: 120363012345678901@g.us — use number OU group_jid"
   },
   {
     "name": "mentions",
     "label": "Menções",
     "type": "text",
-    "help": "Em grupo: `all` para mencionar todos, ou números separados por vírgula."
-  },
-  {
-    "name": "delay",
-    "label": "Atraso (ms)",
-    "type": "number",
-    "help": "Simula 'digitando...' antes de enviar.",
-    "default": 0
-  },
-  {
-    "name": "async",
-    "label": "Envio assíncrono",
-    "type": "boolean",
-    "help": "Enfileira o envio na UAZAPI.",
-    "default": false
+    "help": "Em grupo: all para @todos"
   }
 ]

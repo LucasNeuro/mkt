@@ -1,12 +1,14 @@
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from supabase import Client, create_client
 
 INSTANCE_NAME = os.getenv("UAZAPI_INSTANCE_NAME", "RTEPORT_INSTANTANEO")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/Sao_Paulo"))
 
 _client: Optional[Client] = None
 
@@ -183,3 +185,130 @@ def save_uazapi_messages(group_jid: str, items: list[dict]) -> int:
             save_message(row)
             saved += 1
     return saved
+
+
+def normalize_phone(value: str | None) -> str:
+    if not value:
+        return ""
+    base = str(value).split("@")[0]
+    return "".join(c for c in base if c.isdigit())
+
+
+def today_local() -> date:
+    return datetime.now(TZ).date()
+
+
+def _today_start_iso() -> str:
+    start = datetime.combine(today_local(), datetime.min.time(), tzinfo=TZ)
+    return start.astimezone(timezone.utc).isoformat()
+
+
+def get_session(admin_phone: str) -> Optional[dict]:
+    client = get_client()
+    result = (
+        client.table("wa_sessions")
+        .select("*")
+        .eq("instance_name", INSTANCE_NAME)
+        .eq("admin_phone", admin_phone)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def upsert_session(admin_phone: str, **fields: Any) -> dict:
+    client = get_client()
+    row = {
+        "instance_name": INSTANCE_NAME,
+        "admin_phone": admin_phone,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        **fields,
+    }
+    result = (
+        client.table("wa_sessions")
+        .upsert(row, on_conflict="instance_name,admin_phone")
+        .execute()
+    )
+    return result.data[0] if result.data else row
+
+
+def clear_session(admin_phone: str) -> None:
+    client = get_client()
+    client.table("wa_sessions").delete().eq("instance_name", INSTANCE_NAME).eq(
+        "admin_phone", admin_phone
+    ).execute()
+
+
+def list_group_messages_today(group_jid: str, limit: int = 500) -> list[dict]:
+    client = get_client()
+    start = _today_start_iso()
+    result = (
+        client.table("wa_messages")
+        .select("*")
+        .eq("instance_name", INSTANCE_NAME)
+        .eq("group_jid", group_jid)
+        .gte("message_at", start)
+        .order("message_at", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []
+
+
+def format_messages_for_ai(messages: list[dict]) -> str:
+    lines: list[str] = []
+    for msg in messages:
+        text = (msg.get("text_content") or "").strip()
+        if not text:
+            continue
+        sender = msg.get("sender_name") or msg.get("sender_jid") or "Desconhecido"
+        ts = msg.get("message_at") or ""
+        time_part = ts[11:16] if len(ts) >= 16 else "??:??"
+        lines.append(f"[{time_part}] {sender}: {text}")
+    return "\n".join(lines) if lines else ""
+
+
+def save_summary(
+    group_jid: str,
+    group_name: str | None,
+    content: str,
+    message_count: int,
+    requested_by: str,
+    sent_to_group: bool = False,
+    poll_sent: bool = False,
+    summary_date: date | None = None,
+) -> dict:
+    client = get_client()
+    day = summary_date or today_local()
+    row = {
+        "instance_name": INSTANCE_NAME,
+        "group_jid": group_jid,
+        "group_name": group_name,
+        "summary_date": day.isoformat(),
+        "content": content,
+        "message_count": message_count,
+        "requested_by": requested_by,
+        "sent_to_group": sent_to_group,
+        "poll_sent": poll_sent,
+    }
+    result = (
+        client.table("wa_summaries")
+        .upsert(row, on_conflict="instance_name,group_jid,summary_date")
+        .execute()
+    )
+    return result.data[0] if result.data else row
+
+
+def list_summaries(group_jid: str | None = None, limit: int = 30) -> list[dict]:
+    client = get_client()
+    query = (
+        client.table("wa_summaries")
+        .select("*")
+        .eq("instance_name", INSTANCE_NAME)
+        .order("summary_date", desc=True)
+        .limit(limit)
+    )
+    if group_jid:
+        query = query.eq("group_jid", group_jid)
+    result = query.execute()
+    return result.data or []

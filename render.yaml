@@ -19,3 +19,9 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: ADMIN_PHONES
+        sync: false
+      - key: APP_TIMEZONE
+        value: America/Sao_Paulo
